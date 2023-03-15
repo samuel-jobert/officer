@@ -23,7 +23,7 @@ remove_bookmark <- function(x, bkm) {
 	bkm_start_node <- xml_find_first(x$doc_obj$get(), expr)
 	# If bookmark not found, stop here
 	if (inherits(bkm_start_node, "xml_missing")) {
-		print("Bookmark ", bkm, " not found !")
+		print(paste0("Bookmark ", bkm, " not found !"))
 		return(x)
 	}
 	
@@ -32,9 +32,17 @@ remove_bookmark <- function(x, bkm) {
 	expr <- sprintf("/descendant::w:bookmarkEnd[@w:id='%s']", bkm_id)
 	bkm_end_node <- xml_find_first(x$doc_obj$get(), expr)
 	
-	# Find parent of bookmark start & end (paragraph)
+	# Find parent of bookmark start & end (paragraph for start, paragraph, body or txbxContent for end)
 	bkm_start_parent <- bkm_start_node %>% xml_parent()
 	bkm_end_parent <- bkm_end_node %>% xml_parent()
+	
+	# If parent of end is not a paragraph, take the preceding sibling paragraph "as parent"
+	bkm_end_parent_name <- bkm_end_parent %>% xml_name()
+	if (bkm_end_parent_name != "p") {
+		expr <- sprintf("//w:bookmarkEnd[@w:id='%s']/preceding-sibling::w:p", bkm_end_node %>% xml_attr("id"))
+		nodes <- xml_find_all(bkm_end_node, expr)
+		bkm_end_parent <- nodes[length(nodes)]
+	}
 
 	# Get parent paraIds
 	bkm_start_parent_id <- bkm_start_parent %>% xml_attr("paraId")
@@ -50,15 +58,20 @@ remove_bookmark <- function(x, bkm) {
 
 	# If start and end parents have the same id (cursor in same paragraph) and 
 	# parent paragraphs are 'body', we can use the body_remove function
-	if (same_par & bkm_start_parent_parent == "body") {
+	if (same_par & bkm_start_parent_parent == "body" & bkm_end_parent_name == "p") {
 		x <- x %>% cursor_bookmark(bkm)
 		x <- x %>% body_remove()
 		return(x)
 	}
 	# If same paragraph but parent not in officer_cursor
+	# or in officer_cursor but end parent is not paragraph
 	# only remove parent paragraph
-	if (same_par & bkm_start_parent_parent != "body") {
+	if (same_par & bkm_start_parent_parent != "body" |
+			same_par & bkm_start_parent_parent == "body" & bkm_end_parent_name != "p") {
 		xml_remove(bkm_start_parent)
+		if (bkm_end_parent_name != "p") {
+			xml_remove(bkm_end_node)
+		}
 		return(x)
 	}
 	# If not same paragraph, but paragraphs are in officer_cursor
@@ -97,6 +110,9 @@ remove_bookmark <- function(x, bkm) {
 		expr <- paste0("//w:p[@w14:paraId='", nodes_id_to_remove, "']", collapse = "|")
 		nodes_to_remove <- xml_find_all(x$doc_obj$get(), expr)
 		xml_remove(nodes_to_remove)
+		if (bkm_end_parent_name != "p") {
+			xml_remove(bkm_end_node)
+		}
 		return(x)
 	}
 }
@@ -105,6 +121,7 @@ remove_bookmark <- function(x, bkm) {
 #' @export
 #' @title Fix duplicated bookmark ids in officer docx document.
 #' Sometimes, Word creates duplicated bookmark ids.
+#' (When creating bookmarks document after creating some in text box ?)
 #' This brings problems when inserting docx file at cursor_bookmark() or 
 #' using functions *_at_bkm
 #' This function checks for duplicates and gives them disctinct new ones
@@ -128,6 +145,7 @@ fix_bookmark_ids <- function(x) {
 	
 	# If no bookmark found, do nothing and stop here
 	if (inherits(nodes_with_bkm_end, "xml_missing")) {
+		print("Found no bookmark in document")
 		return(x)
 	}
 
@@ -139,8 +157,10 @@ fix_bookmark_ids <- function(x) {
 	
 	# No duplicated : do nothing and stop here
 	if (length(duplicated_ids) == 0) {
+		print("No duplicated bookmark ids.")
 		return(x)
 	}
+	print(paste0("Found ", length(duplicated_ids), " duplicated bookmark ids !"))
 	max_id <- max(as.integer(bkm_ids))
 
 	for (id in duplicated_ids) {
